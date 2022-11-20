@@ -24,7 +24,7 @@ cpu_temp_encoder = SensorEncoder({
     ],
 })
 
-cpu_temp_data = cpu_temp_encoder.encode(cpu_temp=45.2, open_files=3412, status="chilling")
+cpu_temp_data = cpu_temp_encoder.encode(cpu_temp=45.2)
 print(cpu_temp_data.hex())
 # > 0005ede1bed5447c4234cccd
 
