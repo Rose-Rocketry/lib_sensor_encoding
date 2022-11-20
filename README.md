@@ -34,6 +34,6 @@ print(cpu_temp_encoder.decode(cpu_temp_data))
 #       cpu_temp = 45.20000076293945
 ```
 
-> For examples that uses all of this library's features, see [\_\_main__.py](./src/lib_sensor_encoding/__main__.py).
+> For examples that uses all of this library's features, see [\_\_main__.py](./lib_sensor_encoding/__main__.py).
 > 
 > You can run these examples after installing this library with the command `python -m lib_sensor_encoding`
