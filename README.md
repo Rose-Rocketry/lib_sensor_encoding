@@ -4,7 +4,7 @@ A versatile python library for dynamically encoding sensor data to a stable and 
 # Installation
 I would recoment installing this library in a [python venv](https://docs.python.org/3/library/venv.html) or simmilar
 ```sh
-pip install git+
+pip install git+https://github.com/Rose-Rocketry/lib_sensor_encoding
 ```
 
 # Example
