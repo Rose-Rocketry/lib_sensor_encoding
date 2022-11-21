@@ -1,5 +1,5 @@
 # Replace with "from lib_sensor_encoding" for normal usage
-from . import TimestampReading, EncodingType, SensorEncoder
+from ... import TimestampReading, EncodingType, SensorEncoder
 from datetime import datetime
 
 # Utility Function

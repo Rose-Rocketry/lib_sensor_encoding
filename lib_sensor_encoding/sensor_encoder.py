@@ -1,6 +1,6 @@
 import construct
 from datetime import datetime
-from typing import Union
+from typing import Optional, Union
 from .sensor_meta import _sensor_meta_struct, SensorMeta, SensorMetaReading, EncodingType, _null_terminated_string
 
 
@@ -108,7 +108,7 @@ class SensorEncoder:
     _meta_dict: SensorMeta
     _can_use_encode_raw: bool
     _cons: construct.Struct
-    _cons_len: int
+    _cons_len: Optional[int]
 
     def __init__(self, meta: Union[SensorMeta, bytes]) -> None:
         if type(meta) == bytes:
@@ -154,7 +154,11 @@ class SensorEncoder:
         return self._meta_dict
 
     @property
-    def length_bytes(self) -> int:
+    def length_bytes(self) -> Optional[int]:
+        """
+        Gets the length of an encoded packet, if known
+        Otherwise returns None
+        """
         return self._cons_len
 
     def encode(self, timestamp=None, **kwargs) -> bytes:
