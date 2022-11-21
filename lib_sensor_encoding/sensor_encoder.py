@@ -40,7 +40,9 @@ _timestamp_cons_len = 8  # _timestamp_cons.sizeof()
 
 def _generate_cons_for_reading(reading: SensorMetaReading):
     if reading["bits"] % 8 != 0:
-        raise NotImplementedError(f"bits must be a multiple of 8, was {reading['bits']}. (Unaligned values are not implemented.)")
+        raise NotImplementedError(
+            f"bits must be a multiple of 8, was {reading['bits']}. (Unaligned values are not implemented.)"
+        )
 
     encoding = EncodingType(int(reading["encoding"]))
     if encoding == EncodingType.float:
@@ -51,7 +53,6 @@ def _generate_cons_for_reading(reading: SensorMetaReading):
         if reading["zero_value"] != 0.0:
             raise ValueError('Do not set "zero_value" for float-type encoding')
 
-        
         if reading["bits"] == 16:
             return construct.Float16b
         elif reading["bits"] == 32:
@@ -59,8 +60,10 @@ def _generate_cons_for_reading(reading: SensorMetaReading):
         elif reading["bits"] == 64:
             return construct.Float64b
         else:
-            raise ValueError(f"Unsupported bit length {reading['bits']} for float, must be 16, 32, or 64")
-    
+            raise ValueError(
+                f"Unsupported bit length {reading['bits']} for float, must be 16, 32, or 64"
+            )
+
     elif encoding == EncodingType.bits_integer_scaled:
         integer = construct.BytesInteger(
             reading["bits"] // 8,
@@ -68,7 +71,7 @@ def _generate_cons_for_reading(reading: SensorMetaReading):
         )
 
         return _SensorReadingScalingAdaptor(reading, integer)
-    
+
     elif encoding == EncodingType.timestamp:
         if reading["unit"] != "":
             raise ValueError('Do not set "unit" for timestamp encoding')
@@ -82,7 +85,7 @@ def _generate_cons_for_reading(reading: SensorMetaReading):
             raise ValueError('Timestamp encoding must be 64 bits')
 
         return _timestamp_cons
-    
+
     elif encoding == EncodingType.string:
         if reading["bits"] != 0:
             raise ValueError('Do not set "bits" for string-type encoding')
@@ -91,10 +94,11 @@ def _generate_cons_for_reading(reading: SensorMetaReading):
         if reading["lsb_value"] != 1.0:
             raise ValueError('Do not set "lsb_value" for string-type encoding')
         if reading["zero_value"] != 0.0:
-            raise ValueError('Do not set "zero_value" for string-type encoding')
+            raise ValueError(
+                'Do not set "zero_value" for string-type encoding')
 
         return _null_terminated_string
-    
+
     else:
         raise ValueError(f"Unsupported encoding {encoding}")
 
@@ -125,7 +129,8 @@ class SensorEncoder:
         elif self._meta_dict["readings"][0]["unit"] != "":
             self._can_use_encode_raw = False
             print("TIMESTAMP_ERROR: WRONG UNIT")
-        elif int(self._meta_dict["readings"][0]["encoding"]) != int(EncodingType.timestamp):
+        elif int(self._meta_dict["readings"][0]["encoding"]) != int(
+                EncodingType.timestamp):
             self._can_use_encode_raw = False
             print("TIMESTAMP_ERROR: WRONG ENCODING")
         else:
@@ -138,33 +143,43 @@ class SensorEncoder:
         try:
             self._cons_len = self._cons.sizeof()
         except construct.SizeofError:
-            self._cons_len = None # Length is dynamic
+            self._cons_len = None  # Length is dynamic
 
     @property
     def meta_blob(self) -> bytes:
         return self._meta_blob
 
     @property
-    def meta_dict(self) -> SensorMetaReading:
+    def meta_dict(self) -> SensorMeta:
         return self._meta_dict
 
     @property
     def length_bytes(self) -> int:
         return self._cons_len
 
-    def encode(self, timestamp=datetime.now(), **kwargs) -> bytes:
+    def encode(self, timestamp=None, **kwargs) -> bytes:
+        if timestamp == None:
+            timestamp = datetime.now()
+
         kwargs["timestamp"] = timestamp
 
         return self._cons.build(kwargs)
 
-    def encode_raw(self, data: bytes, timestamp=datetime.now()) -> bytes:
+    def encode_raw(self, data: bytes, timestamp=None) -> bytes:
+        if timestamp == None:
+            timestamp = datetime.now()
+
         if not self._can_use_encode_raw:
-            raise ValueError("This encoding does not support encode_raw. In order to support encode_raw, it's first reading must be TimestampReading")
+            raise ValueError(
+                "This encoding does not support encode_raw. In order to support encode_raw, it's first reading must be TimestampReading"
+            )
 
         # If the data size is dynamic (i.e. strings), this is not checked
         _cons_len_no_ts = self._cons_len - _timestamp_cons_len
         if self._cons_len != None and len(data) != _cons_len_no_ts:
-            raise ValueError(f"Raw data should be {_cons_len_no_ts} bytes, is {len(data)} bytes")
+            raise ValueError(
+                f"Raw data should be {_cons_len_no_ts} bytes, is {len(data)} bytes"
+            )
 
         return _timestamp_cons.build(timestamp) + data
 
