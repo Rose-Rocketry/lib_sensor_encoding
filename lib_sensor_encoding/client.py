@@ -13,6 +13,7 @@ class MQTTSensorClient:
     _port: int
     _keepalive: int
     _sensor_discovery_enabled: bool
+    _sensor_discovery_subscribe_all: bool
     _topic_meta_prefix: str
     _topic_data_prefix: str
 
@@ -41,11 +42,15 @@ class MQTTSensorClient:
         keepalive=60,
         client_id=None,
         sensor_discovery_enabled=False,
+        sensor_discovery_subscribe_all=False,
     ) -> None:
         self._host = host
         self._port = port
         self._keepalive = keepalive
         self._sensor_discovery_enabled = sensor_discovery_enabled
+        if sensor_discovery_subscribe_all and not sensor_discovery_enabled:
+            raise ValueError("sensor_discovery_subscribe_all requires sensor_discovery_enabled to be true")
+        self._sensor_discovery_subscribe_all = sensor_discovery_subscribe_all
         self._topic_meta_prefix = topic_prefix + META_PREFIX
         self._topic_data_prefix = topic_prefix + DATA_PREFIX
 
@@ -94,6 +99,9 @@ class MQTTSensorClient:
         self._logger.info(f"Sensor {repr(name)} deleted")
 
     def subscribe_sensor(self, name: str) -> None:
+        if self._sensor_discovery_subscribe_all:
+            return # We're already subscribed to all sensors
+
         if name in self._subscribed_sensors:
             pass
 
@@ -150,11 +158,16 @@ class MQTTSensorClient:
             # Subscribe to meta messages for all sensors
             client.subscribe(self._topic_meta_prefix + "#", qos=1)
 
-        for name in self._subscribed_sensors:
-            # Subscribe to messages for subscribed sensors
-            # This is needed if sensors are subscribed to while the client is not connected
-            self._subscribe_sensor_meta(name)
-            self._subscribe_sensor_data(name)
+        if self._sensor_discovery_subscribe_all:
+            # Subscribe to data messages for all sensors
+            client.subscribe(self._topic_data_prefix + "#", qos=2)
+        else:
+            for name in self._subscribed_sensors:
+                # Subscribe to messages for subscribed sensors
+                # This is needed if sensors are subscribed to while the client is not connected
+                # or if the server restarts
+                self._subscribe_sensor_meta(name)
+                self._subscribe_sensor_data(name)
 
         for name in self._created_sensor_encoders.keys():
             # Publish metadata for created sensors
