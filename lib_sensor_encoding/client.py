@@ -86,9 +86,6 @@ class MQTTSensorClient:
 
         return functools.partial(self.publish_sensor_data, name)
 
-    def publish_sensor_data(self, name: str, **kwargs):
-        self._publish_sensor_data(name, **kwargs)
-
     def delete_sensor(self, name: str):
         if name not in self._created_sensor_encoders:
             return
@@ -134,8 +131,17 @@ class MQTTSensorClient:
             retain=True,
         )
 
-    def _publish_sensor_data(self, name: str, **kwargs):
+    def publish_sensor_data(self, name: str, **kwargs):
         payload = self._created_sensor_encoders[name].encode(**kwargs)
+
+        return self._client.publish(
+            self._topic_data_prefix + name,
+            payload,
+            qos=0,
+        )
+
+    def publish_sensor_data_raw(self, name: str, data: bytes, timestamp = None):
+        payload = self._created_sensor_encoders[name].encode_raw(data, timestamp)
 
         return self._client.publish(
             self._topic_data_prefix + name,
