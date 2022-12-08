@@ -14,6 +14,7 @@ class MQTTSensorClient:
     _keepalive: int
     _sensor_discovery_enabled: bool
     _sensor_discovery_subscribe_all: bool
+    _on_message_callback_is_raw: bool
     _topic_meta_prefix: str
     _topic_data_prefix: str
 
@@ -31,7 +32,12 @@ class MQTTSensorClient:
     """
     on_sensor_data: Optional[Callable[[str, dict], None]]
     """
-    Called whenever a sensor data is received from a subscribed sensor 
+    Called whenever a sensor data is received from a subscribed sensor
+    """
+    on_sensor_data_raw: Optional[Callable[[str, bytes], None]]
+    """
+    Called whenever a sensor data is received from a subscribed sensor
+    Receives the raw, un-decoded packet. Setting this disables on_sensor_data
     """
 
     def __init__(
@@ -62,6 +68,7 @@ class MQTTSensorClient:
         self.on_sensor_discovered = None
         self.on_sensor_deleted = None
         self.on_sensor_data = None
+        self.on_sensor_data_raw = None
 
         self._client = Client(client_id=client_id, clean_session=True)
         self._client.on_connect = self._on_connect
@@ -235,6 +242,12 @@ class MQTTSensorClient:
     def _on_message_data(self, client: Client, userdata, message: MQTTMessage):
         name = message.topic.removeprefix(self._topic_data_prefix)
         blob = message.payload
+
+        if self.on_sensor_data_raw != None:
+            self._logger.debug(f"Forwarding raw packet from {repr(name)}")
+
+            self.on_sensor_data_raw(name, blob)
+            return
 
         existing_encoder = self._discovered_sensor_encoders.get(name)
 
