@@ -1,43 +1,51 @@
-import functools
 import logging
+import msgpack
+import time
 from paho.mqtt.client import Client, MQTTMessage
-from typing import Optional, Callable
-from . import SensorEncoder, SensorMeta
+from typing import TypedDict, Literal, Optional, Callable
 
 META_PREFIX = "meta/"
 DATA_PREFIX = "data/"
 
+class SensorMetaChannel():
+    name: str
+    type: Literal["number", "vector", "string", "bool", "timestamp", "object"]
+    unit: Optional[str]
+    scale: Optional[float]
+    components: Optional[tuple[str]]
+    minimum: Optional[float]
+    maximum: Optional[float]
+
+class SensorMeta(TypedDict):
+    name: str
+    channels: tuple[SensorMetaChannel]
+
+def apply_scale(meta: SensorMeta, data: tuple, encode: bool) -> tuple:
+    def apply_scale_single(channel: SensorMetaChannel, data):
+        if "scale" in channel:
+            if channel["type"] == "number":
+                if encode:
+                    return round(data * channel["scale"])
+                else:
+                    return data / channel["scale"]
+            elif channel["type"] == "vector":
+                if encode:
+                    return tuple(map(lambda d: round(d * channel["scale"]), data))
+                else:
+                    return tuple(map(lambda d: d / channel["scale"], data))
+            else:
+                raise ValueError(f"scale only supported for numbers and vectors, not {channel['type']}")
+        else:
+            return data
+
+    assert len(meta["channels"]) == len(data)
+    return tuple(map(apply_scale_single, data))
+
 
 class MQTTSensorClient:
-    _host: str
-    _port: int
-    _keepalive: int
-    _sensor_discovery_enabled: bool
-    _sensor_discovery_subscribe_all: bool
-    _on_message_callback_is_raw: bool
-    _topic_meta_prefix: str
-    _topic_data_prefix: str
-
-    _subscribed_sensors: set[str]
-    _discovered_sensor_encoders: dict[str, SensorEncoder]
-    _created_sensor_encoders: dict[str, SensorEncoder]
-
-    on_sensor_discovered: Optional[Callable[[str, SensorEncoder], None]]
-    """
-    Called whenever a new sensor is discovered, or an old sensor is updated with new metadata\
-    """
-    on_sensor_deleted: Optional[Callable[[str], None]]
-    """
-    Called whenever a sensor is deleted due to it's retained message being deleted, or malformation metadata 
-    """
     on_sensor_data: Optional[Callable[[str, dict], None]]
     """
     Called whenever a sensor data is received from a subscribed sensor
-    """
-    on_sensor_data_raw: Optional[Callable[[str, bytes], None]]
-    """
-    Called whenever a sensor data is received from a subscribed sensor
-    Receives the raw, un-decoded packet. Setting this disables on_sensor_data
     """
 
     def __init__(
@@ -47,28 +55,19 @@ class MQTTSensorClient:
         port=1883,
         keepalive=60,
         client_id=None,
-        sensor_discovery_enabled=False,
-        sensor_discovery_subscribe_all=False,
     ) -> None:
         self._host = host
         self._port = port
         self._keepalive = keepalive
-        self._sensor_discovery_enabled = sensor_discovery_enabled
-        if sensor_discovery_subscribe_all and not sensor_discovery_enabled:
-            raise ValueError("sensor_discovery_subscribe_all requires sensor_discovery_enabled to be true")
-        self._sensor_discovery_subscribe_all = sensor_discovery_subscribe_all
         self._topic_meta_prefix = topic_prefix + META_PREFIX
         self._topic_data_prefix = topic_prefix + DATA_PREFIX
 
-        self._subscribed_sensors = set()
-        self._discovered_sensor_encoders = dict()
-        self._created_sensor_encoders = dict()
-        self._logger = logging.getLogger(MQTTSensorClient.__name__)
-
-        self.on_sensor_discovered = None
-        self.on_sensor_deleted = None
         self.on_sensor_data = None
-        self.on_sensor_data_raw = None
+
+        self._subscribed_sensors = set()
+        self._discovered_sensors_meta = dict()
+        self._created_sensors_meta = dict()
+        self._logger = logging.getLogger(MQTTSensorClient.__name__)
 
         self._client = Client(client_id=client_id, clean_session=True)
         self._client.on_connect = self._on_connect
@@ -79,40 +78,43 @@ class MQTTSensorClient:
                                           self._on_message_data)
         self._client.enable_logger()
 
-    def create_sensor(self, name: str, meta: SensorMeta) -> Callable:
-        encoder = SensorEncoder(meta)
-        if encoder.length_bytes == None:
-            size = "dynamic"
-        else:
-            size = f"{encoder.length_bytes} byte"
+        self._packer = msgpack.Packer()
+        self._unpacker = msgpack.Unpacker(use_list=False)
 
-        self._logger.info(f"Creating sensor {repr(name)} with {size} packets")
-        self._created_sensor_encoders[name] = encoder
-        if self._client.is_connected():
-            self._publish_sensor_meta(name)
-
-        return functools.partial(self.publish_sensor_data, name)
-
-    def delete_sensor(self, name: str):
-        if name not in self._created_sensor_encoders:
-            return
-
-        # Clear the retain message and inform clients of deletion
-        self._publish_sensor_meta_delete(name)
-
-        self._logger.info(f"Sensor {repr(name)} deleted")
-
-    def subscribe_sensor(self, name: str) -> None:
-        if self._sensor_discovery_subscribe_all:
+    def subscribe_sensor(self, id: str) -> None:
+        """
+        Subscribe to a sensor with the given ID.
+        """
+        if "#" in self._subscribed_sensors:
             return # We're already subscribed to all sensors
 
-        if name in self._subscribed_sensors:
-            pass
+        if id in self._subscribed_sensors:
+            return
 
-        self._subscribed_sensors.add(name)
+        self._subscribed_sensors.add(id)
 
-        self._subscribe_sensor_meta(name)
-        self._subscribe_sensor_data(name)
+        self._subscribe_sensor_meta(id)
+        self._subscribe_sensor_data(id)
+
+    def subscribe_all_sensors(self) -> None:
+        """
+        Subscribe to all sensors
+        """
+        if "#" in self._subscribed_sensors:
+            return # We're already subscribed to all sensors
+
+        self._subscribed_sensors.clear()
+        self._subscribed_sensors.add("#")
+
+        self._subscribe_sensor_meta(id)
+        self._subscribe_sensor_data(id)
+
+    def create_sensor(self, id: str, meta: SensorMeta):
+        self._logger.info(f"Creating sensor {id}")
+        self._created_sensors_meta[id] = meta
+        if self._client.is_connected():
+            self._publish_sensor_meta(meta)
+
 
     def run_foreground(self):
         self._client.connect(self._host, self._port, self._keepalive)
@@ -122,144 +124,80 @@ class MQTTSensorClient:
         self._client.connect_async(self._host, self._port, self._keepalive)
         self._client.loop_start()
 
-    def _publish_sensor_meta(self, name: str):
+    def _publish_sensor_meta(self, id: str):
         return self._client.publish(
-            self._topic_meta_prefix + name,
-            self._created_sensor_encoders[name].meta_blob,
+            self._topic_meta_prefix + id,
+            self._packer.pack(self._created_sensors_meta[id]),
             qos=1,
             retain=True,
         )
 
-    def _publish_sensor_meta_delete(self, name: str):
-        return self._client.publish(
-            self._topic_meta_prefix + name,
-            b"",
-            qos=1,
-            retain=True,
-        )
+    def publish_sensor_data(self, id: str, data: tuple, prepend_timestamp: bool, qos=0, retain=False):
+        """
+        Publishes a single data point for the given sensor
+        **data**: A tuple containing all of the channels of the sensor
+        **prepend_timestamp**: If true, the current time is prepended as the first channel
+        **qos**: QOS of the MQTT message
+        **retain**: Whether to set the retain flag in the MQTT message
+        """
 
-    def publish_sensor_data(self, name: str, **kwargs):
-        payload = self._created_sensor_encoders[name].encode(**kwargs)
+        if prepend_timestamp:
+            data = (msgpack.Timestamp.from_unix_nano(time.time_ns()),) + data
 
-        return self._client.publish(
-            self._topic_data_prefix + name,
-            payload,
-            qos=0,
-        )
+        if id not in self._created_sensors_meta:
+            raise RuntimeError("Sensor must be created before you can publish data")
 
-    def publish_sensor_data_raw(self, name: str, data: bytes, timestamp = None):
-        payload = self._created_sensor_encoders[name].encode_raw(data, timestamp)
+        data = apply_scale(self._created_sensors_meta[id], data, encode=True)
+        data_packed = self._packer.pack(data)
 
         return self._client.publish(
-            self._topic_data_prefix + name,
-            payload,
-            qos=0,
+            self._topic_data_prefix + id,
+            data_packed,
+            qos=qos,
+            retain=False,
         )
 
-    def _subscribe_sensor_meta(self, name: str):
-        if not self._sensor_discovery_enabled and self._client.is_connected():
-            self._client.subscribe(self._topic_meta_prefix + name, qos=1)
-
-    def _subscribe_sensor_data(self, name: str):
+    def _subscribe_sensor_meta(self, id: str):
         if self._client.is_connected():
-            self._client.subscribe(self._topic_data_prefix + name, qos=0)
+            self._client.subscribe(self._topic_meta_prefix + id, qos=1)
+
+    def _subscribe_sensor_data(self, id: str):
+        if self._client.is_connected():
+            self._client.subscribe(self._topic_data_prefix + id, qos=0)
 
     def _on_connect(self, client: Client, userdata, flags, rc):
         self._logger.info(f"Connected with result code {rc}")
 
-        if self._sensor_discovery_enabled:
-            # Subscribe to meta messages for all sensors
-            client.subscribe(self._topic_meta_prefix + "#", qos=1)
-
-        if self._sensor_discovery_subscribe_all:
-            # Subscribe to data messages for all sensors
-            client.subscribe(self._topic_data_prefix + "#", qos=2)
-        else:
-            for name in self._subscribed_sensors:
-                # Subscribe to messages for subscribed sensors
-                # This is needed if sensors are subscribed to while the client is not connected
-                # or if the server restarts
-                self._subscribe_sensor_meta(name)
-                self._subscribe_sensor_data(name)
-
-        for name in self._created_sensor_encoders.keys():
-            # Publish metadata for created sensors
-            # This is needed if sensors are created to while the client is not connected
-            self._publish_sensor_meta(name)
+        for id in self._subscribed_sensors:
+            # Subscribe to messages for subscribed sensors
+            # This is needed if sensors are subscribed to while the client is not connected
+            # or if the server restarts
+            self._subscribe_sensor_meta(id)
+            self._subscribe_sensor_data(id)
 
     def _on_disconnect(self, userdata, flags, rc):
         self._logger.warn(f"Disconnected with result code {rc}")
 
-        if self.on_sensor_deleted != None:
-            for name in self._discovered_sensor_encoders.keys():
-                self.on_sensor_deleted(name)
-
-        self._discovered_sensor_encoders.clear()
 
     def _on_message_meta(self, client: Client, userdata, message: MQTTMessage):
-        name = message.topic.removeprefix(self._topic_meta_prefix)
-        blob = message.payload
-
-        existing_encoder = self._discovered_sensor_encoders.get(name)
-        if len(blob) == 0:
-
-            if existing_encoder != None:
-                self._logger.info(f"Sensor {repr(name)} deleted")
-                self._discovered_sensor_encoders.pop(name)
-
-                if self.on_sensor_deleted != None:
-                    self.on_sensor_deleted(name)
-            else:
-                self._logger.info(f"Sensor {repr(name)} deleted (ignored)")
-
-            return
-        elif existing_encoder == None:
-            self._logger.info(f"New sensor {repr(name)}")
-        else:
-            # Existing Sensor
-            if blob == existing_encoder.meta_blob:
-                self._logger.debug(f"Sensor {repr(name)} metadata refreshed")
-                return
-
-            self._logger.info(f"New metadata for sensor {repr(name)}")
+        id = message.topic.removeprefix(self._topic_meta_prefix)
+        packed = message.payload
 
         try:
-            encoder = SensorEncoder(blob)
-            self._logger.debug(f"Encoder created for {repr(name)} with {len(encoder.meta_dict['readings'])} readings")
-            self._discovered_sensor_encoders[name] = encoder
-
-            if self.on_sensor_discovered != None:
-                self.on_sensor_discovered(name, encoder)
+            self._discovered_sensors_meta[id] = msgpack.unpackb(packed)
+            self._logger.debug(f"Sensor discovered with id {repr(id)} and {len(self._discovered_sensors_meta[id]['channels'])} channels")
         except Exception as e:
-            self._logger.exception("Error decoding metadata blob:", e)
+            self._logger.exception("Error decoding metadata:", e)
 
-            if existing_encoder != None:
-                self._discovered_sensor_encoders.pop(name)
-
-                if self.on_sensor_deleted != None:
-                    self.on_sensor_deleted(name)
 
     def _on_message_data(self, client: Client, userdata, message: MQTTMessage):
-        name = message.topic.removeprefix(self._topic_data_prefix)
-        blob = message.payload
+        id = message.topic.removeprefix(self._topic_data_prefix)
+        if id not in self._discovered_sensors_meta:
+            self._logger.warn(f"Received data for unknown sensor {id}, ignoring")
 
-        if self.on_sensor_data_raw != None:
-            self._logger.debug(f"Forwarding raw packet from {repr(name)}")
+        meta = self._created_sensors_meta[id]
+        data = self._unpacker.unpack(message.payload)
+        data = apply_scale(meta, data, encode=False)
 
-            self.on_sensor_data_raw(name, blob)
-            return
-
-        existing_encoder = self._discovered_sensor_encoders.get(name)
-
-        if existing_encoder == None:
-            self._logger.debug(f"Data packet received for unknown sensor {repr(name)}")
-            return
-
-        try:
-            data = existing_encoder.decode(blob)
-            self._logger.debug(f"Data packet received for sensor {repr(name)}")
-
-            if self.on_sensor_data != None:
-                self.on_sensor_data(name, data)
-        except Exception as e:
-            self._logger.exception(f"Malformed data packet received for sensor {repr(name)}", e)
+        if self.on_message_data != None:
+            self.on_message_data(id, meta, data)
