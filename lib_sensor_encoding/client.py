@@ -1,11 +1,14 @@
 import logging
 import msgpack
 import time
+import threading
+import random
 from paho.mqtt.client import Client, MQTTMessage
 from typing import TypedDict, Literal, Optional, Callable
 
 META_PREFIX = "meta/"
 DATA_PREFIX = "data/"
+META_REPUBLISH_INTERVAL = 30
 
 class SensorMetaChannel():
     name: str
@@ -114,12 +117,26 @@ class MQTTSensorClient:
 
 
     def run_foreground(self):
+        self._start_meta_republish_thread()
         self._client.connect(self._host, self._port, self._keepalive)
         self._client.loop_forever()
 
     def run_background(self):
+        self._start_meta_republish_thread()
         self._client.connect_async(self._host, self._port, self._keepalive)
         self._client.loop_start()
+
+    def _start_meta_republish_thread(self):
+        def loop():
+            while True:
+                time.sleep(META_REPUBLISH_INTERVAL * random.uniform(0.9, 1.1))
+                if self._client.is_connected():
+                    for id in self._created_sensors_meta.keys():
+                        self._publish_sensor_meta(id)
+
+        threading.Thread(target=loop, name="meta_republish_thread", daemon=True).start()
+
+
 
     def _publish_sensor_meta(self, id: str):
         return self._client.publish(
@@ -186,8 +203,12 @@ class MQTTSensorClient:
         try:
             self._discovered_sensors_meta[id] = msgpack.unpackb(packed, use_list=False)
             self._logger.debug(f"Sensor discovered with id {repr(id)} and {len(self._discovered_sensors_meta[id]['channels'])} channels")
+        except msgpack.ExtraData as e:
+            self._logger.exception(f"Error decoding metadata with id {repr(id)}:", exc_info=e)
+            self._logger.error(f"Unpacked: {e.unpacked}")
+            self._logger.error(f"Extra: {e.extra}")
         except Exception as e:
-            self._logger.exception("Error decoding metadata:", e)
+            self._logger.exception(f"Error decoding metadata with id {repr(id)}:", exc_info=e)
 
 
     def _on_message_data(self, client: Client, userdata, message: MQTTMessage):
