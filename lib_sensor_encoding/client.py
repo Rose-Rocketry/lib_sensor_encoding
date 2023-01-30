@@ -39,11 +39,11 @@ def apply_scale(meta: SensorMeta, data: tuple, encode: bool) -> tuple:
             return data
 
     assert len(meta["channels"]) == len(data)
-    return tuple(map(apply_scale_single, data))
+    return tuple(map(apply_scale_single, meta["channels"], data))
 
 
 class MQTTSensorClient:
-    on_sensor_data: Optional[Callable[[str, dict], None]]
+    on_sensor_data: Callable[[str, dict], None]
     """
     Called whenever a sensor data is received from a subscribed sensor
     """
@@ -78,9 +78,6 @@ class MQTTSensorClient:
                                           self._on_message_data)
         self._client.enable_logger()
 
-        self._packer = msgpack.Packer()
-        self._unpacker = msgpack.Unpacker(use_list=False)
-
     def subscribe_sensor(self, id: str) -> None:
         """
         Subscribe to a sensor with the given ID.
@@ -113,7 +110,7 @@ class MQTTSensorClient:
         self._logger.info(f"Creating sensor {id}")
         self._created_sensors_meta[id] = meta
         if self._client.is_connected():
-            self._publish_sensor_meta(meta)
+            self._publish_sensor_meta(id)
 
 
     def run_foreground(self):
@@ -127,7 +124,7 @@ class MQTTSensorClient:
     def _publish_sensor_meta(self, id: str):
         return self._client.publish(
             self._topic_meta_prefix + id,
-            self._packer.pack(self._created_sensors_meta[id]),
+            msgpack.packb(self._created_sensors_meta[id]),
             qos=1,
             retain=True,
         )
@@ -148,7 +145,7 @@ class MQTTSensorClient:
             raise RuntimeError("Sensor must be created before you can publish data")
 
         data = apply_scale(self._created_sensors_meta[id], data, encode=True)
-        data_packed = self._packer.pack(data)
+        data_packed = msgpack.packb(data)
 
         return self._client.publish(
             self._topic_data_prefix + id,
@@ -175,6 +172,9 @@ class MQTTSensorClient:
             self._subscribe_sensor_meta(id)
             self._subscribe_sensor_data(id)
 
+        for id in self._created_sensors_meta.keys():
+            self._publish_sensor_meta(id)
+
     def _on_disconnect(self, userdata, flags, rc):
         self._logger.warn(f"Disconnected with result code {rc}")
 
@@ -184,7 +184,7 @@ class MQTTSensorClient:
         packed = message.payload
 
         try:
-            self._discovered_sensors_meta[id] = msgpack.unpackb(packed)
+            self._discovered_sensors_meta[id] = msgpack.unpackb(packed, use_list=False)
             self._logger.debug(f"Sensor discovered with id {repr(id)} and {len(self._discovered_sensors_meta[id]['channels'])} channels")
         except Exception as e:
             self._logger.exception("Error decoding metadata:", e)
@@ -194,10 +194,11 @@ class MQTTSensorClient:
         id = message.topic.removeprefix(self._topic_data_prefix)
         if id not in self._discovered_sensors_meta:
             self._logger.warn(f"Received data for unknown sensor {id}, ignoring")
+            return
 
-        meta = self._created_sensors_meta[id]
-        data = self._unpacker.unpack(message.payload)
+        meta = self._discovered_sensors_meta[id]
+        data = msgpack.unpackb(message.payload, use_list=False)
         data = apply_scale(meta, data, encode=False)
 
-        if self.on_message_data != None:
-            self.on_message_data(id, meta, data)
+        if self.on_sensor_data != None:
+            self.on_sensor_data(id, meta, data)
