@@ -11,7 +11,7 @@ pip install git+https://github.com/Rose-Rocketry/lib_sensor_encoding
 
 ## Sensor Metadata Format
 ### Overall Format
-```json
+```json5
 {
     "name": "string", // Human-readable name for the sensor
     "channels": [
@@ -25,7 +25,7 @@ pip install git+https://github.com/Rose-Rocketry/lib_sensor_encoding
 ```
 
 ### Channel Format
-```json
+```json5
 {
     "name": "string", // Human-readable name for the channel
     "type": "number" or "vector" or "string" or "bool" or "timestamp" or "object",
@@ -37,7 +37,7 @@ pip install git+https://github.com/Rose-Rocketry/lib_sensor_encoding
 Encodes a unix timestamp.
 The first channel of any sensor should have type "timestamp" and name "timestamp",
 representing when the sample was collected
-```json
+```json5
 {
     "name": "timestamp",
     "type": "timestamp",
@@ -45,7 +45,7 @@ representing when the sample was collected
 ```
 
 ### `"number"` channels
-```json
+```json5
 {
     "name": "Human-readable name for the channel",
     "type": "number",
@@ -61,7 +61,7 @@ representing when the sample was collected
 ### `"vector"` channels
 Vector channels are essentially the same as number channels, but represent a list of numbers
 instead of a single number
-```json
+```json5
 {
     "name": "Human-readable name for the channel",
     "type": "vector",
@@ -77,7 +77,7 @@ instead of a single number
 ```
 
 ### `"string"`, `"bool"` and `"object"`
-```json
+```json5
 {
     "name": "Human-readable name for the channel",
     "type": "string" or "bool" or "object",
